@@ -1,4 +1,5 @@
 import re
+import pandas as pd
 from rapidfuzz import fuzz
 
 
@@ -67,3 +68,10 @@ def pick_representative_name(names):
     most_common = counts[counts == max_count].index
     
     return most_common[0]
+
+def is_valid(x):
+    return pd.notna(x) and str(x).strip() != "" and str(x).strip().upper() != "NA"
+
+
+
+

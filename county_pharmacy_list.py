@@ -4,7 +4,7 @@ import geopy.geocoders as geoc  # for the geographical aspects
 from rapidfuzz import fuzz      # for string analysis
 
 # function needed to clean pharmacy addresses, pharmacy names, and rename groupings
-from cleaning import clean_address, clean_name, pick_representative_name       
+from cleaning import clean_address, clean_name, pick_representative_name, is_valid
 from NPI_assist import pull_from_NPI               # function needed to pull pharmacy info
 
 # a function that will take a data frame of pharmacy names and addresses and returns the number of occurrences of the
@@ -13,10 +13,13 @@ from NPI_assist import pull_from_NPI               # function needed to pull pha
 # input: DF, a pandas dataframe with pharmacy names and addresses from a region
 #        MATCH_threshold, a number between 0 and 100 that represents percent of similarity that is good enough
 #        with_variants, a boolean that will determine whether the output will include details on groupings
+#        with_debug, a boolean that will determine whether the output will include the merge logs for each pharmacy
 #
-# output: a data frame with pharmacy organization name and the count of occurrences in a region represented by DF
-#
-def county_pharmacy_list(DF: pd.DataFrame, MATCH_THRESHOLD: float, with_variants: True):
+# output: a dictionary with:
+#   - "summary": a DataFrame with pharmacy organization names and counts of occurrences in the region represented by DF
+#   - "debug" (optional): a DataFrame containing row-level grouping and merge trace information (only if with_debug=True)
+
+def county_pharmacy_list(DF: pd.DataFrame, MATCH_THRESHOLD: float, with_variants: True, with_debug: False):
 
     # start with empty list that will eventually contain all pharmacies in a single county
     T_co = []
@@ -134,60 +137,103 @@ def county_pharmacy_list(DF: pd.DataFrame, MATCH_THRESHOLD: float, with_variants
 
         T_co.append(df3)
 
-    county_pharm = pd.concat(T_co, axis = 0)
+    county_pharm = pd.concat(T_co, axis = 0).reset_index(drop=True)
     
     # now make that list unique
     
-    # clean and format the pharmacy names for processing
-    county_pharm['clean_name'] = county_pharm['name'].apply(clean_name)
-    # start with each pharmacy as its own initial group
-    county_pharm['company_group'] = county_pharm.index.astype(str)  # temporary company ID
-    # group pharmacies by same location address
-    mask = county_pharm['AddressLocation'].notna()
-    county_pharm.loc[mask, 'company_group'] = (county_pharm[mask].groupby('AddressLocation')['company_group'].transform('first'))
+    # clean and format the pharmacy names and addresses for processing
+    county_pharm['name_clean'] = county_pharm['name'].apply(lambda x: clean_name(x) if is_valid(x) else np.nan)
+    county_pharm['AddressLocation'] = county_pharm['AddressLocation'].replace("", np.nan)
+    county_pharm['AddressMailing'] = county_pharm['AddressMailing'].replace("", np.nan)
+    # drop entries that don't have either a location or mailing address, since we won't be able to use them for grouping
+    county_pharm = county_pharm[~(county_pharm['AddressLocation'].isna() &county_pharm['AddressMailing'].isna())].copy()
 
-    # group pharmacies by the same mailing address
-    for mailing, group_ids in county_pharm[~county_pharm['AddressMailing'].isna()].groupby('AddressMailing')['company_group']:
+    # start with each pharmacy as its own initial group
+    county_pharm['company_group'] = county_pharm.index.astype(str) # temporary company ID
+
+    # start log of merges
+    county_pharm['merge_log'] = [[] for _ in range(len(county_pharm))]
+
+    # build dict for group to representative name mapping for logging purposes
+    group_to_rep = (county_pharm.groupby('company_group')['name_clean'].apply(lambda x: pick_representative_name(x.dropna())).to_dict())
+    # helper function to get representative name for a group, used in logging
+    def rep(group_id):
+        return group_to_rep.get(group_id, "")
+
+    # stage 1: group pharmacies by same location address
+    mask = county_pharm['AddressLocation'].apply(is_valid)
+    original_groups = county_pharm['company_group'].copy()
+    new_groups = (
+        county_pharm[mask]
+        .groupby('AddressLocation')['company_group']
+        .transform('first')
+    )
+    county_pharm.loc[mask, 'company_group'] = new_groups
+    changed = mask & (county_pharm['company_group'] != original_groups)
+    # log old + new
+    old_groups = original_groups.copy()
+    county_pharm.loc[changed, 'merge_log'] = county_pharm.loc[changed].apply(
+        lambda row: row['merge_log'] + [
+            f"location_merge:{rep(old_groups[row.name])} + {rep(row['company_group'])}"
+        ],
+        axis=1
+    )
+
+
+    # stage 2: group pharmacies by the same mailing address
+    mask = county_pharm['AddressMailing'].apply(is_valid)
+    original_groups = county_pharm['company_group'].copy()
+    for mailing, group_ids in county_pharm[mask].groupby('AddressMailing')['company_group']:
         min_group = group_ids.min()
         county_pharm.loc[county_pharm['AddressMailing'] == mailing, 'company_group'] = min_group
+    changed = mask & (county_pharm['company_group'] != original_groups)
+    old_groups = original_groups.copy()
+    county_pharm.loc[changed, 'merge_log'] = county_pharm.loc[changed].apply(
+        lambda row: row['merge_log'] + [
+            f"mailing_merge:{rep(old_groups[row.name])} + {rep(row['company_group'])}"
+        ],
+        axis=1
+    )
 
-    # group pharmacies by same name
-    for name, group_ids in county_pharm[~county_pharm['clean_name'].isna()].groupby('clean_name')['company_group']:
-        min_group = group_ids.min()
-        county_pharm.loc[county_pharm['clean_name'] == name, 'company_group'] = min_group
-
-    # build name dict for each group to apply to fuzzy matching
-    group_to_names = (county_pharm.groupby('company_group')['clean_name'].apply(lambda x: set(x.dropna())).to_dict())
-
-    # combine groups if one name from each group has a high fuzzy match, can adjust match threshold if needed
+    # stage 3: combine groups if representative name from each group has a high fuzzy match
     merged = True
     while merged:
         merged = False
-        groups = list(group_to_names.keys())
+        groups = list(group_to_rep.keys())
         for i, g1 in enumerate(groups):
-            names1 = group_to_names[g1]
+            rep1 = group_to_rep.get(g1)
+            if not is_valid(rep1):
+                continue
             for g2 in groups[i+1:]:
-                names2 = group_to_names[g2]
-                found_match = False
-                for n1 in names1:
-                    for n2 in names2:
-                        score = fuzz.token_sort_ratio(n1, n2)
-                        if score >= MATCH_THRESHOLD:
-                            found_match = True
-                            break
-                    if found_match:
-                        break
-                if found_match:
-                    county_pharm.loc[county_pharm['company_group'] == g2, 'company_group'] = g1
-                    group_to_names[g1].update(group_to_names[g2])
-                    group_to_names[g2] = set()
+                rep2 = group_to_rep.get(g2)
+                if not is_valid(rep2):
+                    continue
+                score = fuzz.token_sort_ratio(rep1, rep2)
+                if score >= MATCH_THRESHOLD:
+                    before_merge = county_pharm['company_group'].copy()
+                    county_pharm.loc[
+                        county_pharm['company_group'] == g2,
+                        'company_group'
+                    ] = g1
+                    changed = county_pharm['company_group'] != before_merge
+                    county_pharm.loc[changed, 'merge_log'] = county_pharm.loc[changed].apply(
+                        lambda row: row['merge_log'] + [
+                            f"fuzzy_merge:{rep2} + {rep1} (score={score})"
+                        ],
+                        axis=1
+                    )
+                    group_to_rep[g1] = pick_representative_name(
+                        county_pharm.loc[county_pharm['company_group'] == g1, 'name_clean'].dropna()
+                    )
+                    group_to_rep.pop(g2, None)
                     merged = True
-                    break 
+                    break
             if merged:
                 break
-
+    
+    
     # assign company_name
-    company_names = county_pharm.groupby('company_group')['clean_name'].apply(pick_representative_name)
+    company_names = county_pharm.groupby('company_group')['name_clean'].apply(pick_representative_name)
     county_pharm['company_name'] = county_pharm['company_group'].map(company_names)
             
     # count unique AddressLocation per company
@@ -195,6 +241,13 @@ def county_pharmacy_list(DF: pd.DataFrame, MATCH_THRESHOLD: float, with_variants
     county_pharm['location_count'] = county_pharm['company_name'].map(location_counts) # add as a new column
     county_pharm = county_pharm.sort_values(by='location_count', ascending=False) # sort df by location count
 
+
+    debug_df = (
+        county_pharm[['name_clean','AddressLocation','AddressMailing','merge_log']].copy()
+        if with_debug 
+        else None
+        )
+    
     if with_variants == False:
 
         DF_unique_pharm_list = location_counts
@@ -204,9 +257,13 @@ def county_pharmacy_list(DF: pd.DataFrame, MATCH_THRESHOLD: float, with_variants
         # summary with counts and name variants to confirm groupings
         DF_unique_pharm_list = county_pharm.groupby('company_name').agg(
             num_locations = ('AddressLocation', 'nunique'),  # unique locations only
-            total_rows = ('clean_name', 'count'),           # total entries for this company
-            name_variants = ('clean_name', lambda x: list(x.unique()))  # unique name variants
+            total_rows = ('name_clean', 'count'),           # total entries for this company
+            name_variants = ('name_clean', lambda x: list(x.unique()))  # unique name variants
         ).sort_values(by='num_locations', ascending=False)
 
 
-    return DF_unique_pharm_list
+        
+    return {
+        "summary": DF_unique_pharm_list,
+        "debug": debug_df if with_debug else None
+    }
