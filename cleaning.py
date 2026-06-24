@@ -2,6 +2,10 @@ import re
 import pandas as pd
 from rapidfuzz import fuzz
 
+#
+# Contributing Authors: Amanda Landi, Addie Duncan (primary)
+#
+
 
 # a function designed to clean an address from the NIP Registry
 #

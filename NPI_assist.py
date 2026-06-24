@@ -5,6 +5,10 @@ import os                       # to clear up memory
 import json                     # data type for NPI data
 
 #
+# Contributing Authors: Mariya Savinov, Leah Hoofstra 
+#
+
+#
 # a function that gets a list of pharmacy information from location (city, state) given
 #
 # input: city, a string for city

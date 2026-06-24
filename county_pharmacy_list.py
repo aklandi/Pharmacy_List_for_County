@@ -3,8 +3,13 @@ import numpy as np              # for nans
 import geopy.geocoders as geoc  # for the geographical aspects
 from rapidfuzz import fuzz      # for string analysis
 
+#
+# Contributing Authors: Amanda Landi, Addie Duncan (primary)
+# 
+
+
 # function needed to clean pharmacy addresses, pharmacy names, and rename groupings
-from cleaning import clean_address, clean_name, pick_representative_name, is_valid
+from cleaning import clean_address, clean_name, pick_representative_name, is_valid       
 from NPI_assist import pull_from_NPI               # function needed to pull pharmacy info
 
 # a function that will take a data frame of pharmacy names and addresses and returns the number of occurrences of the
@@ -149,16 +154,20 @@ def county_pharmacy_list(DF: pd.DataFrame, MATCH_THRESHOLD: float, with_variants
     county_pharm = county_pharm[~(county_pharm['AddressLocation'].isna() &county_pharm['AddressMailing'].isna())].copy()
 
     # start with each pharmacy as its own initial group
-    county_pharm['company_group'] = county_pharm.index.astype(str) # temporary company ID
+    county_pharm['company_group'] = county_pharm.index.astype(str)  # temporary company ID
 
-    # start log of merges
+    # start log of merges to keep track
     county_pharm['merge_log'] = [[] for _ in range(len(county_pharm))]
-
     # build dict for group to representative name mapping for logging purposes
     group_to_rep = (county_pharm.groupby('company_group')['name_clean'].apply(lambda x: pick_representative_name(x.dropna())).to_dict())
     # helper function to get representative name for a group, used in logging
     def rep(group_id):
         return group_to_rep.get(group_id, "")
+    
+    # merging logic is as follows:
+    # 1. Merge all pharmacies with the same location address
+    # 2. Merge groups of pharmacies from step 1 which have any matching mailing addresses. 
+    # 3. Merge groups from step 2 if the representative names for each group are a fuzzy match.
 
     # stage 1: group pharmacies by same location address
     mask = county_pharm['AddressLocation'].apply(is_valid)
@@ -231,7 +240,6 @@ def county_pharmacy_list(DF: pd.DataFrame, MATCH_THRESHOLD: float, with_variants
             if merged:
                 break
     
-    
     # assign company_name
     company_names = county_pharm.groupby('company_group')['name_clean'].apply(pick_representative_name)
     county_pharm['company_name'] = county_pharm['company_group'].map(company_names)
@@ -241,13 +249,12 @@ def county_pharmacy_list(DF: pd.DataFrame, MATCH_THRESHOLD: float, with_variants
     county_pharm['location_count'] = county_pharm['company_name'].map(location_counts) # add as a new column
     county_pharm = county_pharm.sort_values(by='location_count', ascending=False) # sort df by location count
 
-
     debug_df = (
         county_pharm[['name_clean','AddressLocation','AddressMailing','merge_log']].copy()
         if with_debug 
         else None
         )
-    
+
     if with_variants == False:
 
         DF_unique_pharm_list = location_counts
@@ -261,8 +268,6 @@ def county_pharmacy_list(DF: pd.DataFrame, MATCH_THRESHOLD: float, with_variants
             name_variants = ('name_clean', lambda x: list(x.unique()))  # unique name variants
         ).sort_values(by='num_locations', ascending=False)
 
-
-        
     return {
         "summary": DF_unique_pharm_list,
         "debug": debug_df if with_debug else None

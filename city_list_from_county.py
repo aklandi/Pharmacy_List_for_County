@@ -3,7 +3,11 @@ from census import Census       # for FIPS information
 from us import states           # for FIPS information
 import osmnx as ox              # to get list of cities
 import re      
-import requests
+
+#
+# Author: Amanda Landi (primary)
+# Other Contributing Authors: Mariya Savinov, Leah Hoofstra
+#
 
 
 def city_list_from_county(API_KEY: str, COUNTY_NAME: str, STATE_ABBR:str ):
@@ -46,6 +50,7 @@ def city_list_from_county(API_KEY: str, COUNTY_NAME: str, STATE_ABBR:str ):
 
     #If the name is two or more words, separated by a space, then put a plus sign between each word - how the NPI registry stores cities with two or more words
     i = 0
+
     while i < len(cities):
             
         for elem in cities:
@@ -71,75 +76,3 @@ def city_list_from_county(API_KEY: str, COUNTY_NAME: str, STATE_ABBR:str ):
     DF = pd.DataFrame({"city": cities, "state": [STATE_ABBR]*len(cities)})
 
     return DF
-
-
-def city_list_from_county_fix(API_KEY: str, COUNTY_NAME: str, STATE_ABBR:str ):
-
-    # rewrite to fix API JSON parsing error
-    state_fips = states.lookup(STATE_ABBR).fips
-    county_fips = get_counties(API_KEY, state_fips)
-    county_fips = county_fips.rename(columns={"NAME": "Name"})
-
-
-    # save county and state fips in separate variables for later use
-    select_row = county_fips['Name'].str.contains(COUNTY_NAME, case=False, regex=False)
-
-    if not select_row.any():
-
-        raise ValueError(f"County '{COUNTY_NAME}' not found")
-
-    place = county_fips.loc[select_row, 'Name'].iloc[0]
-
-
-    # now use OpenStreet Maps to get list of cities within boundary of county
-    area = ox.geocode_to_gdf(place)
-
-    tags = {'place': ['city', 'town', 'village', 'hamlet']}
-
-    polygon = area.geometry.iloc[0]
-
-    cities = ox.features_from_polygon(polygon, tags)['name'].dropna().unique()
-
-    #If the name is two or more words, separated by a space, then put a plus sign between each word - how the NPI registry stores cities with two or more words
-    i = 0
-    while i < len(cities):
-            
-        for elem in cities:
-
-            if len(elem.split(" ")) > 1:
-
-                temp = elem.split(" ")
-                s = temp[0]
-                
-                for k in temp[1:]:
-
-                    s = s + "+" + k
-
-                cities[i] = s
-                
-                i+=1
-
-            else:
-
-                i+=1
-
-    # put all cities and listed state in a data frame
-    DF = pd.DataFrame({"city": cities, "state": [STATE_ABBR]*len(cities)})
-
-    return DF
-
-
-def get_counties(API_KEY, state_fips):
-
-    url = (
-        "https://api.census.gov/data/2020/acs/acs5"
-        "?get=NAME"
-        f"&for=county:*"
-        f"&in=state:{state_fips}"
-        f"&key={API_KEY}"
-    )
-
-    r = requests.get(url)
-    data = r.json()
-
-    return pd.DataFrame(data[1:], columns=data[0])
