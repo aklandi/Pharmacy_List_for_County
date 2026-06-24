@@ -73,6 +73,13 @@ def pick_representative_name(names):
     
     return most_common[0]
 
+
+# function that determines whether an object x contains a string or is empty
+#
+# input: x, a string
+#
+# output: a boolean that determines whether x is a valid string (empty or not)
+#
 def is_valid(x):
     return pd.notna(x) and str(x).strip() != "" and str(x).strip().upper() != "NA"
 

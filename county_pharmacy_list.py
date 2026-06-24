@@ -23,7 +23,6 @@ from NPI_assist import pull_from_NPI               # function needed to pull pha
 # output: a dictionary with:
 #   - "summary": a DataFrame with pharmacy organization names and counts of occurrences in the region represented by DF
 #   - "debug" (optional): a DataFrame containing row-level grouping and merge trace information (only if with_debug=True)
-
 def county_pharmacy_list(DF: pd.DataFrame, MATCH_THRESHOLD: float, with_variants: True, with_debug: False):
 
     # start with empty list that will eventually contain all pharmacies in a single county

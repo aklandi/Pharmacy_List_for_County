@@ -3,13 +3,43 @@ from census import Census       # for FIPS information
 from us import states           # for FIPS information
 import osmnx as ox              # to get list of cities
 import re      
+import requests    
 
 #
-# Author: Amanda Landi (primary)
-# Other Contributing Authors: Mariya Savinov, Leah Hoofstra
+# Main Authors: Amanda Landi, Addie Duncan 
 #
 
+# function that gets a list of counties within a particular state using open street maps
+#
+# input: API_KEY, a string containing the OSM api access key
+#        state_fips, the FIPS code from the acs/us census
+#
+# output: a data frame with a list of the counties in a state
+#
+def get_counties(API_KEY, state_fips):
 
+    url = (
+        "https://api.census.gov/data/2020/acs/acs5"
+        "?get=NAME"
+        f"&for=county:*"
+        f"&in=state:{state_fips}"
+        f"&key={API_KEY}"
+    )
+
+    r = requests.get(url)
+    data = r.json()
+
+    return pd.DataFrame(data[1:], columns=data[0])
+
+
+# function that returns a list of cities from a county name in the US
+#
+# input: API_KEY, a string containing the OSM api access key
+#        COUNTY_NAME, a string containing the FULL county name
+#        STATE_ABBR, a string with the corresponding state's abbraviated name
+#
+# output: a dataframe containing the list of cities within the given county, state
+#
 def city_list_from_county(API_KEY: str, COUNTY_NAME: str, STATE_ABBR:str ):
 
     # Get the fips for state and county
