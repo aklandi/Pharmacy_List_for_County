@@ -74,35 +74,63 @@ def city_list_from_county(API_KEY: str, COUNTY_NAME: str, STATE_ABBR:str ):
     place =  county_fips['Name'][select_row].array[0]
     area = ox.geocoder.geocode_to_gdf(place)
 
-    tags = {'place': ['city', 'town', 'village', 'hamlet']}
+    tags = {'place': ['city', 'town', 'village', 'hamlet', 'locality']}
     polygon = area.iloc[0]['geometry']
-    cities = ox.features.features_from_polygon(polygon, tags)['name'].unique()
 
-    #If the name is two or more words, separated by a space, then put a plus sign between each word - how the NPI registry stores cities with two or more words
-    i = 0
+    # for places like the Bronx that is both a county and a city
+    try:
+        cities = ox.features.features_from_polygon(polygon, tags)['name'].unique()
+    
+    # there needs to be an alternative way
+    except:
 
-    while i < len(cities):
-            
-        for elem in cities:
+        print("That is a county, but has no listed cities, towns, villages, hamlets, localities, boroughs within it.")
 
-            if len(elem.split(" ")) > 1:
+    check_file = pd.read_csv('exceptions.csv', header = 0)
+    for indx, elem in enumerate(check_file['COUNTY']):
+        if elem == COUNTY_NAME:
+            cities = check_file['GIVEN_NAME'][indx]
+        else:
+            continue
 
-                temp = elem.split(" ")
-                s = temp[0]
+        DF = pd.DataFrame(
+        {
+            "city": cities, 
+            "state": [STATE_ABBR]
+        }
+        )
+
+        return DF
+    
+    else:
+
+        #If the name is two or more words, separated by a space, then put a plus sign between each word - how the NPI registry stores cities with two or more words
+        i = 0
+
+        while i < len(cities):
                 
-                for k in temp[1:]:
+            for elem in cities:
 
-                    s = s + "+" + k
+                if len(elem.split(" ")) > 1:
 
-                cities[i] = s
-                
-                i+=1
+                    temp = elem.split(" ")
+                    s = temp[0]
+                    
+                    for k in temp[1:]:
 
-            else:
+                        s = s + "+" + k
 
-                i+=1
+                    cities[i] = s
+                    
+                    i+=1
 
-    # put all cities and listed state in a data frame
-    DF = pd.DataFrame({"city": cities, "state": [STATE_ABBR]*len(cities)})
+                else:
 
-    return DF
+                    i+=1
+
+        # put all cities and listed state in a data frame
+        DF = pd.DataFrame({"city": cities, "state": [STATE_ABBR]*len(cities)})
+
+        return DF
+
+    
